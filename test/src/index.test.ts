@@ -8,6 +8,7 @@ import {
   afterEach,
   vi,
 } from "vitest";
+import { saveProviderConfig } from "~/src/llm/credential-store";
 import { sha256Hex } from "~/src/utils/crypto";
 
 const SCHEMA = `
@@ -311,5 +312,80 @@ describe("tenant prefix routing", () => {
       messages: [{ role: "user", content: "Hi" }],
       max_tokens: 20,
     });
+  });
+
+  it("serves Google AI Studio despite its pi-ai provider alias", async () => {
+    await insertOrg("org_root", { isRoot: true });
+    await insertKey("k_root", "org_root", "sk_root");
+    await SELF.fetch("http://example.com/api/bootstrap/status");
+    await saveProviderConfig(env, "org_root", "google-ai-studio", {
+      keys: ["AIza-test"],
+      settings: { defaultModel: "gemini-3.1-flash-lite" },
+    });
+
+    const upstreamFetch = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          `data: ${JSON.stringify({
+            candidates: [
+              {
+                content: {
+                  role: "model",
+                  parts: [{ text: "Hello from Google" }],
+                },
+                finishReason: "STOP",
+              },
+            ],
+            usageMetadata: {
+              promptTokenCount: 3,
+              candidatesTokenCount: 4,
+              totalTokenCount: 7,
+            },
+            responseId: "google-response-1",
+          })}\n\n`,
+          {
+            headers: {
+              "content-type": "text/event-stream",
+            },
+          },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", upstreamFetch);
+
+    const res = await SELF.fetch("http://example.com/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer sk_root",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google-ai-studio/gemini-3.1-flash-lite",
+        input: "Hi",
+      }),
+    });
+
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.output_text).toBe("Hello from Google");
+
+    const streamRes = await SELF.fetch("http://example.com/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer sk_root",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google-ai-studio/gemini-3.1-flash-lite",
+        input: "Hi",
+        stream: true,
+      }),
+    });
+    expect(streamRes.status).toBe(200);
+    const streamText = await streamRes.text();
+    expect(streamText).toContain("response.output_text.delta");
+    expect(streamText).toContain("Hello from Google");
+    expect(streamText).toContain("response.completed");
+    expect(upstreamFetch).toHaveBeenCalledTimes(2);
   });
 });

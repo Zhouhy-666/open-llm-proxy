@@ -11,6 +11,7 @@ import {
 } from "../tenants/encryption";
 import { newId } from "../tenants/encryption";
 import { safeJsonParse, newUuid, nowSeconds } from "../utils/crypto";
+import { canonicalProviderName } from "./provider-registry";
 import type { Credential, CredentialStore } from "@earendil-works/pi-ai";
 
 export interface ProviderConfigRow {
@@ -50,6 +51,15 @@ export interface StoredProviderConfig {
 
 export interface DecryptedProviderConfig extends StoredProviderConfig {
   keys: string[];
+}
+
+/**
+ * pi-ai uses its registered provider id (`google`) while the control plane
+ * stores the canonical proxy provider id (`google-ai-studio`). Credential
+ * lookups must cross that boundary in both directions.
+ */
+export function canonicalCredentialProviderId(providerId: string): string {
+  return canonicalProviderName(providerId.trim());
 }
 
 /** Per-request crypto context: unwraps the tenant DEK once and reuses it. */
@@ -264,7 +274,7 @@ export function createTenantCredentialStore(
       const config = await getProviderConfig(
         env,
         organizationId,
-        providerId,
+        canonicalCredentialProviderId(providerId),
         await ctx(),
       );
       if (!config?.enabled || config.keys.length === 0) return undefined;
@@ -279,7 +289,10 @@ export function createTenantCredentialStore(
       );
       return configs
         .filter((c) => c.enabled && c.keys.length > 0)
-        .map((c) => ({ providerId: c.provider, type: "api_key" as const }));
+        .map((c) => ({
+          providerId: canonicalCredentialProviderId(c.provider),
+          type: "api_key" as const,
+        }));
     },
     async modify(providerId, fn) {
       const current = await this.read(providerId);
@@ -290,14 +303,18 @@ export function createTenantCredentialStore(
       await saveProviderConfig(
         env,
         organizationId,
-        providerId,
+        canonicalCredentialProviderId(providerId),
         { keys: [key] },
         await ctx(),
       );
       return next;
     },
     async delete(providerId) {
-      await deleteProviderConfig(env, organizationId, providerId);
+      await deleteProviderConfig(
+        env,
+        organizationId,
+        canonicalCredentialProviderId(providerId),
+      );
     },
   };
 }

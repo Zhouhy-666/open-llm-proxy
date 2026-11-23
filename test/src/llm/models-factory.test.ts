@@ -1,8 +1,19 @@
 import { describe, it, expect } from "vitest";
+import { canonicalCredentialProviderId } from "~/src/llm/credential-store";
 import { modelFor } from "~/src/llm/models-factory";
 import { providerApiId } from "~/src/llm/provider-registry";
 
 describe("modelFor", () => {
+  it("maps pi-ai provider ids back to stored proxy provider ids", () => {
+    expect(canonicalCredentialProviderId("google")).toBe("google-ai-studio");
+    expect(canonicalCredentialProviderId("google-ai-studio")).toBe(
+      "google-ai-studio",
+    );
+    expect(canonicalCredentialProviderId("custom-gateway")).toBe(
+      "custom-gateway",
+    );
+  });
+
   it("uses baked catalog metadata for known models", () => {
     const m = modelFor(
       "google-vertex",
