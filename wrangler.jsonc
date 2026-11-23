@@ -10,9 +10,11 @@
   // Compatibility flags
   // Docs: https://developers.cloudflare.com/workers/configuration/compatibility-flags/
   "compatibility_flags": ["nodejs_compat"],
-  "limits": {
-    "cpu_ms": 30000
-  },
+
+  //"limits": {
+  //  "cpu_ms": 30000
+  //},
+
   // Workers Logs
   // Docs: https://developers.cloudflare.com/workers/observability/logs/workers-logs/
   "observability": {
