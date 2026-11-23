@@ -19,6 +19,7 @@ import {
   tenantPrefixMiddleware,
 } from "./middlewares/tenant-prefix";
 import { chatCompletionsV2 } from "./requests/chat_completions_v2";
+import { completionsV2 } from "./requests/completions_v2";
 import { embeddingsV2 } from "./requests/embeddings_v2";
 import { modelsV2 } from "./requests/models_v2";
 import { responsesV2 } from "./requests/responses_v2";
@@ -163,6 +164,13 @@ export function createApp(): Hono<AppBindings> {
       apiKeyAuth: c.get("apiKeyAuth")!,
       ctx: c.executionCtx,
     });
+  const completions = (c: import("hono").Context<AppBindings>) =>
+    completionsV2({
+      request: c.req.raw,
+      env: c.env,
+      apiKeyAuth: c.get("apiKeyAuth")!,
+      ctx: c.executionCtx,
+    });
 
   for (const path of [
     "/v1/responses",
@@ -207,6 +215,20 @@ export function createApp(): Hono<AppBindings> {
     tenantPrefixGuardMiddleware,
     chatCompletions,
   );
+  for (const path of [
+    "/v1/completions",
+    "/:tenantPrefix/v1/completions",
+    "/completions",
+    "/:tenantPrefix/completions",
+  ] as const) {
+    app.post(
+      path,
+      tenantPrefixMiddleware,
+      apiKeyAuthMiddleware,
+      tenantPrefixGuardMiddleware,
+      completions,
+    );
+  }
   app.post(
     "/v1/embeddings",
     tenantPrefixMiddleware,

@@ -6,7 +6,7 @@ A serverless, multi-tenant LLM gateway built on [Cloudflare Workers](https://www
 
 ## Key Capabilities
 
-- **Unified OpenAI-Compatible Endpoints:** `/v1/responses`, `/v1/chat/completions`, and `/v1/models` route seamlessly to configured upstream providers with streaming (SSE) and tool calling support. Responses API requests are translated to the provider's Chat Completions wire format.
+- **Unified OpenAI-Compatible Endpoints:** `/v1/responses`, `/v1/chat/completions`, `/v1/completions`, and `/v1/models` route seamlessly to configured upstream providers with streaming (SSE) and tool calling support. Responses and legacy text-completion requests are translated to the provider's Chat Completions wire format.
 - **Multi-Tenant URL Prefixes & Custom Base URLs:** Each tenant receives an isolated base URL (e.g. `https://proxy.example.com/proxy_a1b2c3/v1`) or custom prefix so standard OpenAI SDKs require zero provider knowledge.
 - **API Key Binding & Scopes:** Bind individual API keys to specific providers to allow bare model IDs (e.g. `gemini-2.5-flash`), enforce lifetime spend caps, and configure granular permissions.
 - **Custom OpenAI-Compatible Providers:** Add self-hosted endpoints (e.g. Ollama, vLLM, LocalAI, OpenRouter, Groq) with custom base URLs, custom headers, and keyless options.

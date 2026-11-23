@@ -65,6 +65,21 @@ describe("worker dispatch (V2)", () => {
     expect(res.status).toBe(401);
   });
 
+  it("returns 401 for unauthenticated /v1/completions requests", async () => {
+    const res = await SELF.fetch("http://example.com/v1/completions", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google-ai-studio/gemini-3.1-flash-lite",
+        prompt: "def add(a, b):",
+      }),
+    });
+    expect(res.status).toBe(401);
+  });
+
   it("returns JSON 404 for unknown API paths", async () => {
     const res = await SELF.fetch("http://example.com/api/nope", {
       headers: { accept: "application/json" },
@@ -386,6 +401,27 @@ describe("tenant prefix routing", () => {
     expect(streamText).toContain("response.output_text.delta");
     expect(streamText).toContain("Hello from Google");
     expect(streamText).toContain("response.completed");
-    expect(upstreamFetch).toHaveBeenCalledTimes(2);
+
+    const completionRes = await SELF.fetch(
+      "http://example.com/v1/completions",
+      {
+        method: "POST",
+        headers: {
+          authorization: "Bearer sk_root",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({
+          model: "google-ai-studio/gemini-3.1-flash-lite",
+          prompt: "def add(a, b):",
+        }),
+      },
+    );
+    expect(completionRes.status).toBe(200);
+    const completionBody = await completionRes.json();
+    expect(completionBody).toMatchObject({
+      object: "text_completion",
+      choices: [{ text: "Hello from Google", finish_reason: "stop" }],
+    });
+    expect(upstreamFetch).toHaveBeenCalledTimes(3);
   });
 });
