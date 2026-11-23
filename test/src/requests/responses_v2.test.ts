@@ -197,6 +197,8 @@ describe("chatCompletionsSseToResponsesSse", () => {
     const upstream = [
       'data: {"choices":[{"delta":{"role":"assistant"}}]}',
       "",
+      'data: {"choices":[{"delta":{"reasoning_content":"Thinking"}}]}',
+      "",
       'data: {"choices":[{"delta":{"content":"Hello"}}]}',
       "",
       'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_3","type":"function","function":{"name":"shell","arguments":"{\\"cmd\\":"}}]}}]}',
@@ -213,6 +215,9 @@ describe("chatCompletionsSseToResponsesSse", () => {
     const events = await convertSse(upstream);
     const types = events.map((event) => event.type);
     expect(types[0]).toBe("response.created");
+    expect(
+      types.filter((type) => type === "response.in_progress").length,
+    ).toBeGreaterThanOrEqual(2);
     expect(types).toContain("response.output_text.delta");
     expect(types).toContain("response.function_call_arguments.delta");
     expect(types[types.length - 1]).toBe("response.completed");

@@ -648,6 +648,18 @@ class ResponsesStreamConverter {
     ];
   }
 
+  /**
+   * Keep the Responses SSE stream observably active while a reasoning model is
+   * thinking but has not emitted user-visible text yet.
+   */
+  keepAlive(): string[] {
+    return [
+      this.event("response.in_progress", {
+        response: this.currentResponse("in_progress"),
+      }),
+    ];
+  }
+
   addTextDelta(delta: string): string[] {
     if (!delta) return [];
     const state = this.ensureText();
@@ -763,7 +775,8 @@ class ResponsesStreamConverter {
 
     const delta = choice.delta;
     if (!delta) return [];
-    const events = this.addTextDelta(delta.content ?? "");
+    const events = delta.reasoning_content ? this.keepAlive() : [];
+    events.push(...this.addTextDelta(delta.content ?? ""));
     for (const tool of delta.tool_calls ?? []) {
       events.push(...this.addToolDelta(tool));
     }
@@ -899,9 +912,16 @@ export function chatCompletionsSseToResponsesSse(
   let finished = false;
   let cancelled = false;
   let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
   return new ReadableStream<Uint8Array>({
     start(controller) {
+      const clearHeartbeat = () => {
+        if (heartbeatTimer !== undefined) {
+          clearInterval(heartbeatTimer);
+          heartbeatTimer = undefined;
+        }
+      };
       const emit = (events: string[]) => {
         if (cancelled) return;
         for (const event of events) controller.enqueue(encoder.encode(event));
@@ -909,11 +929,15 @@ export function chatCompletionsSseToResponsesSse(
       const finish = () => {
         if (finished) return;
         finished = true;
+        clearHeartbeat();
         emit(converter.finish());
         if (!cancelled) controller.close();
       };
 
       emit(converter.responseCreated());
+      heartbeatTimer = setInterval(() => {
+        if (!cancelled && !finished) emit(converter.keepAlive());
+      }, 10_000);
 
       void (async () => {
         const reader = upstream.getReader();
@@ -951,6 +975,7 @@ export function chatCompletionsSseToResponsesSse(
           finish();
         } catch (error) {
           if (!cancelled) {
+            clearHeartbeat();
             const message =
               error instanceof Error ? error.message : String(error);
             emit(converter.fail(message));
@@ -964,6 +989,10 @@ export function chatCompletionsSseToResponsesSse(
     },
     cancel() {
       cancelled = true;
+      if (heartbeatTimer !== undefined) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = undefined;
+      }
       void upstreamReader?.cancel().catch(() => undefined);
     },
   });
