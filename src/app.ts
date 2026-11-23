@@ -21,6 +21,7 @@ import {
 import { chatCompletionsV2 } from "./requests/chat_completions_v2";
 import { embeddingsV2 } from "./requests/embeddings_v2";
 import { modelsV2 } from "./requests/models_v2";
+import { responsesV2 } from "./requests/responses_v2";
 import { AppVariables } from "./types";
 import { Hono } from "hono";
 import { createMiddleware } from "hono/factory";
@@ -155,6 +156,28 @@ export function createApp(): Hono<AppBindings> {
       env: c.env,
       apiKeyAuth: c.get("apiKeyAuth")!,
     });
+  const responses = (c: import("hono").Context<AppBindings>) =>
+    responsesV2({
+      request: c.req.raw,
+      env: c.env,
+      apiKeyAuth: c.get("apiKeyAuth")!,
+      ctx: c.executionCtx,
+    });
+
+  for (const path of [
+    "/v1/responses",
+    "/:tenantPrefix/v1/responses",
+    "/responses",
+    "/:tenantPrefix/responses",
+  ] as const) {
+    app.post(
+      path,
+      tenantPrefixMiddleware,
+      apiKeyAuthMiddleware,
+      tenantPrefixGuardMiddleware,
+      responses,
+    );
+  }
 
   app.post(
     "/v1/chat/completions",

@@ -1,5 +1,13 @@
 import { SELF, env } from "cloudflare:test";
-import { describe, it, expect, beforeAll, beforeEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  beforeAll,
+  beforeEach,
+  afterEach,
+  vi,
+} from "vitest";
 import { sha256Hex } from "~/src/utils/crypto";
 
 const SCHEMA = `
@@ -12,6 +20,9 @@ CREATE TABLE IF NOT EXISTS members (id TEXT PRIMARY KEY, organizationId TEXT NOT
 CREATE TABLE IF NOT EXISTS invitations (id TEXT PRIMARY KEY, organizationId TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, email TEXT NOT NULL, role TEXT, status TEXT NOT NULL, expiresAt INTEGER NOT NULL, inviterId TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, createdAt INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, name TEXT NOT NULL, key_hash TEXT NOT NULL UNIQUE, key_prefix TEXT NOT NULL, created_by TEXT NOT NULL, created_at INTEGER NOT NULL, last_used_at INTEGER, expires_at INTEGER, spend_disabled_until INTEGER, status TEXT NOT NULL DEFAULT 'active', scopes TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS provider_configs (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, provider TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, config TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, UNIQUE(organization_id, provider));
+CREATE TABLE IF NOT EXISTS tenant_keys (organization_id TEXT NOT NULL PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE, wrapped_dek TEXT NOT NULL, wrapped_dek_iv TEXT NOT NULL DEFAULT '', kek_version INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS request_metrics (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL, user_id TEXT, api_key_id TEXT, timestamp INTEGER NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, method TEXT NOT NULL, status_code INTEGER NOT NULL, latency_ms INTEGER NOT NULL, tokens_input INTEGER, tokens_output INTEGER, tokens_cached INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER, cost_usd REAL, error_message TEXT, cache_hit INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS model_pricing (provider TEXT NOT NULL, model TEXT NOT NULL, input_per_1m REAL NOT NULL DEFAULT 0, output_per_1m REAL NOT NULL DEFAULT 0, cache_read_per_1m REAL NOT NULL DEFAULT 0, cache_write_per_1m REAL NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (provider, model));
 CREATE TABLE IF NOT EXISTS tenant_settings (organization_id TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY (organization_id, key));
 CREATE TABLE IF NOT EXISTS system_settings (key TEXT PRIMARY KEY, value TEXT, updated_at INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY, organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE, user_id TEXT NOT NULL REFERENCES users(id), action TEXT NOT NULL, resource_type TEXT NOT NULL, resource_id TEXT, details TEXT, timestamp INTEGER NOT NULL DEFAULT 0);
@@ -41,6 +52,18 @@ describe("worker dispatch (V2)", () => {
     expect(res.status).toBe(401);
   });
 
+  it("returns 401 for unauthenticated /v1/responses requests", async () => {
+    const res = await SELF.fetch("http://example.com/v1/responses", {
+      method: "POST",
+      headers: {
+        accept: "application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ model: "openai/gpt-4o", input: "hi" }),
+    });
+    expect(res.status).toBe(401);
+  });
+
   it("returns JSON 404 for unknown API paths", async () => {
     const res = await SELF.fetch("http://example.com/api/nope", {
       headers: { accept: "application/json" },
@@ -59,8 +82,15 @@ describe("worker dispatch (V2)", () => {
 describe("tenant prefix routing", () => {
   beforeEach(async () => {
     await env.DB.exec("DELETE FROM api_keys;");
+    await env.DB.exec("DELETE FROM request_metrics;");
+    await env.DB.exec("DELETE FROM provider_configs;");
+    await env.DB.exec("DELETE FROM tenant_keys;");
     await env.DB.exec("DELETE FROM organizations;");
     await env.DB.exec("DELETE FROM system_settings;");
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   async function insertOrg(
@@ -194,5 +224,92 @@ describe("tenant prefix routing", () => {
     const res = await chat("/v1/chat/completions", "sk_root", "gpt-4o");
     expect(res.status).toBe(400);
     expect((await res.json()).error.message).toMatch(/provider\/model/);
+  });
+
+  it("serves Responses API requests through a custom chat provider", async () => {
+    await insertOrg("org_root", { isRoot: true });
+    await insertKey("k_root", "org_root", "sk_root");
+    await SELF.fetch("http://example.com/api/bootstrap/status");
+    await env.DB.prepare(
+      `INSERT INTO provider_configs
+       (id, organization_id, provider, name, enabled, config)
+       VALUES ('pcfg_local', 'org_root', 'local-llm', 'Local', 1, ?)`,
+    )
+      .bind(
+        JSON.stringify({
+          keys: [],
+          settings: {
+            baseUrl: "https://upstream.example.com",
+            defaultModel: "chat-model",
+          },
+        }),
+      )
+      .run();
+
+    const upstreamFetch = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            id: "chatcmpl-local",
+            object: "chat.completion",
+            created: 1,
+            model: "chat-model",
+            choices: [
+              {
+                index: 0,
+                message: { role: "assistant", content: "Hello from upstream" },
+                finish_reason: "stop",
+              },
+            ],
+            usage: {
+              prompt_tokens: 3,
+              completion_tokens: 4,
+              total_tokens: 7,
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        ),
+      ),
+    );
+    vi.stubGlobal("fetch", upstreamFetch);
+
+    const res = await SELF.fetch("http://example.com/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer sk_root",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "local-llm/chat-model",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Hi" }],
+          },
+        ],
+        max_output_tokens: 20,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.object).toBe("response");
+    expect(body.output_text).toBe("Hello from upstream");
+    expect(body.usage).toMatchObject({
+      input_tokens: 3,
+      output_tokens: 4,
+      total_tokens: 7,
+    });
+
+    expect(upstreamFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = upstreamFetch.mock.calls[0];
+    expect(url).toBe("https://upstream.example.com/v1/chat/completions");
+    const upstreamBody = JSON.parse(String(init?.body));
+    expect(upstreamBody).toMatchObject({
+      model: "chat-model",
+      messages: [{ role: "user", content: "Hi" }],
+      max_tokens: 20,
+    });
   });
 });
