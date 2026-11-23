@@ -186,6 +186,38 @@ describe("toPiContext", () => {
     });
     expect(context.messages).toHaveLength(0);
   });
+
+  it("passes function tool definitions to pi-ai providers", () => {
+    const context = toPiContext({
+      messages: [{ role: "user", content: "Inspect the project" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "shell",
+            description: "Run a command",
+            parameters: {
+              type: "object",
+              properties: { cmd: { type: "string" } },
+              required: ["cmd"],
+            },
+          },
+        },
+      ],
+    });
+
+    expect(context.tools).toEqual([
+      {
+        name: "shell",
+        description: "Run a command",
+        parameters: {
+          type: "object",
+          properties: { cmd: { type: "string" } },
+          required: ["cmd"],
+        },
+      },
+    ]);
+  });
 });
 
 describe("assistantToOpenAI", () => {

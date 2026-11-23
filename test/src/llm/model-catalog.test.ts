@@ -4,6 +4,7 @@ import {
   builtinModels,
   defaultModelFor,
   isGeminiFamily,
+  isGoogleTextGenerationModel,
   mergeModels,
   normalizeProviderModelId,
   registeredProviderId,
@@ -12,6 +13,30 @@ import {
 } from "~/src/llm/model-catalog";
 
 describe("model-catalog", () => {
+  it("only exposes Google models that generate text for chat clients", () => {
+    expect(
+      isGoogleTextGenerationModel("models/gemini-3.1-flash-lite", [
+        "generateContent",
+        "countTokens",
+      ]),
+    ).toBe(true);
+    expect(
+      isGoogleTextGenerationModel("models/gemini-3.1-flash-tts-preview", [
+        "generateContent",
+      ]),
+    ).toBe(false);
+    expect(
+      isGoogleTextGenerationModel("models/gemini-embedding-001", [
+        "embedContent",
+      ]),
+    ).toBe(false);
+    expect(
+      isGoogleTextGenerationModel("models/imagen-4.0-generate-001", [
+        "predict",
+      ]),
+    ).toBe(false);
+  });
+
   it("resolves baked catalog ids for registry aliases", () => {
     expect(builtinCatalogId("google-ai-studio")).toBe("google");
     expect(builtinCatalogId("google")).toBe("google");

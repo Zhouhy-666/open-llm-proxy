@@ -104,6 +104,34 @@ export function normalizeProviderModelId(id: string, provider: string): string {
   return out;
 }
 
+/**
+ * Google's model list includes speech, image, and embedding models alongside
+ * text-generation models. Codex and the Chat Completions endpoint can only use
+ * models that generate assistant text/function calls, so keep those out of
+ * `/v1/models`.
+ */
+export function isGoogleTextGenerationModel(
+  name: string,
+  supportedGenerationMethods?: unknown,
+): boolean {
+  const id = name.replace(/^models\//, "").toLowerCase();
+  const methods = Array.isArray(supportedGenerationMethods)
+    ? supportedGenerationMethods.filter(
+        (method): method is string => typeof method === "string",
+      )
+    : [];
+  if (
+    methods.length > 0 &&
+    !methods.includes("generateContent") &&
+    !methods.includes("streamGenerateContent")
+  ) {
+    return false;
+  }
+  return !/(?:^|[-_])(?:tts|audio|image|imagen|veo|embedding)(?:[-_]|$)/i.test(
+    id,
+  );
+}
+
 /** Sensible per-provider default model ids (verified against the baked catalog). */
 const CURATED_DEFAULT_MODELS: Record<string, string> = {
   "google-ai-studio": "gemini-2.5-flash",

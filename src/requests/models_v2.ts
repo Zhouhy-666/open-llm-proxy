@@ -8,6 +8,7 @@ import {
 } from "../llm/google-vertex";
 import {
   builtinModels,
+  isGoogleTextGenerationModel,
   mergeModels,
   normalizeProviderModelId,
   synthesizedMetadata,
@@ -138,9 +139,21 @@ async function aiStudioModels(cfg: {
   );
   const list =
     json && Array.isArray((json as { models?: unknown }).models)
-      ? (json as { models: { name?: string }[] }).models
+      ? (
+          json as {
+            models: {
+              name?: string;
+              supportedGenerationMethods?: unknown;
+            }[];
+          }
+        ).models
       : [];
   const live = list
+    .filter(
+      (m) =>
+        typeof m.name === "string" &&
+        isGoogleTextGenerationModel(m.name, m.supportedGenerationMethods),
+    )
     .map((m) => m.name)
     .filter((n): n is string => typeof n === "string")
     .map((n) => normalizeProviderModelId(n, "google-ai-studio"))

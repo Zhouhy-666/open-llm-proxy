@@ -72,8 +72,35 @@ interface OpenAiMessage {
   name?: string;
 }
 
+interface OpenAiTool {
+  type?: string;
+  function?: {
+    name?: string;
+    description?: string;
+    parameters?: unknown;
+  };
+}
+
 function makeTextContent(text: string) {
   return { type: "text" as const, text };
+}
+
+function toPiTools(tools: OpenAiTool[] | undefined): Context["tools"] {
+  if (!tools) return undefined;
+  const converted = tools.flatMap((raw) => {
+    if (raw.type !== "function" || !raw.function?.name) return [];
+    return [
+      {
+        name: raw.function.name,
+        description: raw.function.description ?? "",
+        parameters: raw.function.parameters ?? {
+          type: "object",
+          properties: {},
+        },
+      },
+    ];
+  });
+  return converted.length > 0 ? (converted as Context["tools"]) : undefined;
 }
 
 /** Convert an OpenAI chat-completions request body into a pi-ai Context. */
@@ -81,6 +108,7 @@ export function toPiContext(body: {
   model?: string;
   messages?: OpenAiMessage[];
   system_prompt?: string;
+  tools?: OpenAiTool[];
 }): Context {
   const systemParts: string[] = [];
   const messages: Message[] = [];
@@ -205,6 +233,7 @@ export function toPiContext(body: {
   return {
     systemPrompt: systemParts.length > 0 ? systemParts.join("\n\n") : undefined,
     messages,
+    tools: toPiTools(body.tools),
   };
 }
 

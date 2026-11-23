@@ -741,62 +741,76 @@ export async function chatCompletionsV2(
       });
     }
 
-    const chunks: string[] = [];
+    const encoder = new TextEncoder();
+    const traceChunks: string[] = [];
     const state = { emittedRole: false };
     const responseId = `chatcmpl-${Math.random().toString(36).slice(2)}`;
     let finalMessage: AssistantMessage | undefined;
-    try {
-      for await (const event of models.stream({
-        model: piModel,
-        context,
-        signal,
-      })) {
-        if (event.type === "done") finalMessage = event.message;
-        if (event.type === "error") finalMessage = event.error;
-        for (const chunk of eventToOpenAIChunks(
-          event,
-          chatBody.model as string,
-          responseId,
-          state,
-        )) {
-          chunks.push(chunk);
+    let chunkCount = 0;
+    let cancelled = false;
+
+    const liveStream = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        try {
+          for await (const event of models.stream({
+            model: piModel,
+            context,
+            signal,
+          })) {
+            if (cancelled) return;
+            if (event.type === "done") finalMessage = event.message;
+            if (event.type === "error") {
+              finalMessage = event.error;
+              throw new Error(
+                event.error.errorMessage ?? "Upstream provider stream failed",
+              );
+            }
+            for (const chunk of eventToOpenAIChunks(
+              event,
+              chatBody.model as string,
+              responseId,
+              state,
+            )) {
+              chunkCount++;
+              if (trace) traceChunks.push(chunk);
+              controller.enqueue(encoder.encode(`data: ${chunk}\n\n`));
+            }
+          }
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          log.debug(
+            `[chat-completions] Streaming completed | provider=${providerName} | model=${modelId} | responseId=${responseId} | chunks=${chunkCount} | ` +
+              `finalStopReason=${finalMessage?.stopReason}`,
+          );
+          record({
+            statusCode: 200,
+            usage: finalMessage ? usageOf(finalMessage) : null,
+            costUsd: finalMessage?.usage?.cost?.total ?? null,
+          });
+          // pi-ai does not expose the raw upstream exchange; only inbound +
+          // converted outbound are available on this route.
+          trace?.setOutboundResponse(encodeSse(traceChunks));
+          submitTrace();
+          controller.close();
+        } catch (err) {
+          if (cancelled) return;
+          record({
+            statusCode: 500,
+            usage: finalMessage ? usageOf(finalMessage) : null,
+            costUsd: finalMessage?.usage?.cost?.total ?? null,
+            errorMessage: err instanceof Error ? err.message : String(err),
+          });
+          trace?.setUpstreamResponse({
+            error: err instanceof Error ? err.message : String(err),
+          });
+          submitTrace();
+          controller.error(err instanceof Error ? err : new Error(String(err)));
         }
-      }
-      log.debug(
-        `[chat-completions] Streaming completed | provider=${providerName} | model=${modelId} | responseId=${responseId} | chunks=${chunks.length} | ` +
-          `finalStopReason=${finalMessage?.stopReason}` +
-          (finalMessage?.stopReason === "error"
-            ? ` | error=${finalMessage?.errorMessage ?? "unknown"}`
-            : ""),
-      );
-    } catch (err) {
-      record({
-        statusCode: 500,
-        usage: finalMessage ? usageOf(finalMessage) : null,
-        costUsd: finalMessage?.usage?.cost?.total ?? null,
-        errorMessage: err instanceof Error ? err.message : String(err),
-      });
-      trace?.setUpstreamResponse({
-        error: err instanceof Error ? err.message : String(err),
-      });
-      submitTrace();
-      throw err;
-    }
-    record({
-      statusCode: 200,
-      usage: finalMessage ? usageOf(finalMessage) : null,
-      costUsd: finalMessage?.usage?.cost?.total ?? null,
-      errorMessage:
-        finalMessage?.stopReason === "error"
-          ? (finalMessage.errorMessage ?? "Stream ended with an error")
-          : null,
+      },
+      cancel() {
+        cancelled = true;
+      },
     });
-    const sseText = encodeSse(chunks);
-    // pi-ai does not expose the raw upstream exchange; only inbound +
-    // converted outbound are available on this route.
-    trace?.setOutboundResponse(sseText);
-    submitTrace();
-    return new Response(sseText, {
+    return new Response(liveStream, {
       headers: { "Content-Type": "text/event-stream" },
     });
   }
