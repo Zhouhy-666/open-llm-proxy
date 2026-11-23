@@ -134,9 +134,9 @@
       // Step 6) so production traffic only reaches your own domain.
       "workers_dev": true,
       "preview_urls": false,
-      "limits": {
-        "cpu_ms": 30000
-      },
+      //"limits": {
+      //  "cpu_ms": 30000
+      //},
       "vars": {
         "BASE_URL": "https://your-domain.com",
         "ENVIRONMENT": "production",
